@@ -1,13 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
-
 	"github.com/charmbracelet/bubbles/textinput"
 	input "github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	te "github.com/muesli/termenv"
+	"io/ioutil"
+	"os"
 )
 
 type Action int
@@ -20,15 +21,16 @@ const (
 )
 
 type model struct {
-	choices     []string
-	cursor      int
-	selected    map[int]struct{}
-	beingEdited int
-	action      Action
-	textInput   input.Model
+	Todos       []string
+	Cursor      int
+	Selected    map[int]struct{}
+	BeingEdited int
+	Action      Action
+	TextInput   input.Model
+	FilePath    string
 }
 
-func initialModel() model {
+func initTextInput() input.Model {
 	inputModel := input.NewModel()
 	inputModel.Placeholder = "What would you like to do?"
 	inputModel.Focus()
@@ -36,12 +38,15 @@ func initialModel() model {
 	inputModel.Width = 40
 	inputModel.Prompt = colorFg(te.String("> "), "2").Bold().String()
 
-	return model{
-		choices:   []string{"Buy carrots", "Buy celery", "Buy kohlrabi"},
-		selected:  make(map[int]struct{}),
-		cursor:    0,
-		textInput: inputModel,
-		action:    None,
+	return inputModel
+}
+
+func initialModel() *model {
+	return &model{
+		Todos:    []string{"Buy carrots", "Buy celery", "Buy kohlrabi"},
+		Selected: make(map[int]struct{}),
+		Cursor:   0,
+		Action:   None,
 	}
 }
 
@@ -50,8 +55,8 @@ func (m model) Init() tea.Cmd {
 }
 
 func clearAndHideInput(m model) model {
-	m.textInput.SetValue("")
-	m.action = None
+	m.TextInput.SetValue("")
+	m.Action = None
 
 	return m
 }
@@ -61,71 +66,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if m.action == Delete {
+		if m.Action == Delete {
 			switch msg.String() {
 			case "y", "Y":
-				if len(m.choices) > 1 {
-					m.choices = append(m.choices[:m.cursor], m.choices[m.cursor+1:]...)
+				if len(m.Todos) > 1 {
+					m.Todos = append(m.Todos[:m.Cursor], m.Todos[m.Cursor+1:]...)
 				} else {
-					m.choices = nil
+					m.Todos = nil
 				}
 			}
 
-			m.action = None
-		} else if m.action == Add || m.action == Edit {
+			m.Action = None
+		} else if m.Action == Add || m.Action == Edit {
 			switch msg.String() {
 			case "esc", "ctrl-c":
 				m = clearAndHideInput(m)
 			case "enter":
-				value := m.textInput.Value()
+				value := m.TextInput.Value()
 
 				if len(value) > 0 {
-					if m.action == Add {
-						m.choices = append(m.choices, value)
-					} else if m.action == Edit {
-						m.choices[m.cursor] = value
+					if m.Action == Add {
+						m.Todos = append(m.Todos, value)
+					} else if m.Action == Edit {
+						m.Todos[m.Cursor] = value
 					}
 				}
 
 				m = clearAndHideInput(m)
 			}
 
-			m.textInput, cmd = m.textInput.Update(msg)
+			m.TextInput, cmd = m.TextInput.Update(msg)
 		} else {
 			switch msg.String() {
 			case "ctrl+c", "q":
+				save(m)
 				return m, tea.Quit
 
 			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
+				if m.Cursor > 0 {
+					m.Cursor--
 				}
 
 			case "down", "j":
-				if m.cursor < len(m.choices)-1 {
-					m.cursor++
+				if m.Cursor < len(m.Todos)-1 {
+					m.Cursor++
 				}
 
 			case "o", "a":
-				m.action = Add
+				m.Action = Add
 
 			case "i", "e":
-				m.action = Edit
-				m.textInput.SetValue(m.choices[m.cursor])
-				m.textInput.CursorEnd()
+				m.Action = Edit
+				m.TextInput.SetValue(m.Todos[m.Cursor])
+				m.TextInput.CursorEnd()
 
 			case "d":
-				m.action = Delete
-				if len(m.choices) > 1 {
-					m.action = Delete
+				m.Action = Delete
+				if len(m.Todos) > 1 {
+					m.Action = Delete
 				}
 
 			case "enter", " ":
-				_, ok := m.selected[m.cursor]
+				_, ok := m.Selected[m.Cursor]
 				if ok {
-					delete(m.selected, m.cursor)
+					delete(m.Selected, m.Cursor)
 				} else {
-					m.selected[m.cursor] = struct{}{}
+					m.Selected[m.Cursor] = struct{}{}
 				}
 			}
 		}
@@ -150,32 +156,32 @@ func (m model) View() string {
 	title = title.Bold()
 	s := title.String()
 
-	if len(m.choices) <= 0 {
-		s += "The list is empty!"
+	if len(m.Todos) <= 0 {
+		s += "The list is empty! press 'a' or 'o' to add a todo"
 	} else {
-		for i, choice := range m.choices {
-			if m.action == Edit && m.cursor == i {
-				s += m.textInput.View() + "\n"
+		for i, todo := range m.Todos {
+			if m.Action == Edit && m.Cursor == i {
+				s += m.TextInput.View() + "\n"
 			} else {
 				cursor := " "
-				if m.cursor == i {
+				if m.Cursor == i {
 					cursor = ">"
 				}
 
 				checked := " "
-				if _, ok := m.selected[i]; ok {
+				if _, ok := m.Selected[i]; ok {
 					checked = "x"
-					choice = te.String(choice).Faint().String()
+					todo = te.String(todo).Faint().String()
 				}
 
-				s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, choice)
+				s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, todo)
 			}
 		}
 	}
 
-	switch m.action {
+	switch m.Action {
 	case Add:
-		s += "\n" + m.textInput.View()
+		s += "\n" + m.TextInput.View()
 	case Delete:
 		s += colorFg(te.String("\nDelete todo? press 'y' to confirm or any other key to cancel."), "9").String()
 	}
@@ -183,8 +189,53 @@ func (m model) View() string {
 	return s
 }
 
+func load(path string) *model {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	model := model{}
+	err = json.Unmarshal(data, &model)
+	if err != nil {
+		fmt.Print(err)
+		return nil
+	}
+
+	// modlelJson, _ := json.Marshal(model)
+	// err = ioutil.WriteFile(path, modlelJson, 0644)
+
+	return &model
+}
+
+func save(m model) {
+	mJson, _ := json.Marshal(m)
+	err := ioutil.WriteFile(m.FilePath, mJson, 0644)
+
+	if err != nil {
+		fmt.Print(err)
+	}
+}
+
+func get_path() string {
+	if len(os.Args) >= 1 {
+		return os.Args[1]
+	} else {
+		return "./todos.json"
+	}
+}
+
 func main() {
-	p := tea.NewProgram(initialModel())
+	path := get_path()
+
+	model := load(path)
+	if model == nil {
+		model = initialModel()
+	}
+	model.TextInput = initTextInput()
+	model.FilePath = path
+
+	p := tea.NewProgram(*model)
 	if err := p.Start(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
