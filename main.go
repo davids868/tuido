@@ -202,9 +202,6 @@ func load(path string) *model {
 		return nil
 	}
 
-	// modlelJson, _ := json.Marshal(model)
-	// err = ioutil.WriteFile(path, modlelJson, 0644)
-
 	return &model
 }
 
@@ -218,11 +215,11 @@ func save(m model) {
 }
 
 func get_path() string {
-	if len(os.Args) >= 1 {
+	if len(os.Args) > 1 {
 		return os.Args[1]
-	} else {
-		return "./todos.json"
 	}
+
+	return "~/.tuido/todos"
 }
 
 func main() {
