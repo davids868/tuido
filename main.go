@@ -14,16 +14,24 @@ import (
 type Action int
 
 const (
-	Add Action = iota
+	None Action = iota
+	Add
 	Edit
 	Delete
-	None
 )
 
-type model struct {
-	Todos       []string
-	Cursor      int
-	Selected    map[int]struct{}
+type Todo struct {
+	Text    string
+	Checked bool
+}
+
+type Data struct {
+	Todos  []Todo
+	Cursor int
+}
+
+type Model struct {
+	Data        Data
 	BeingEdited int
 	Action      Action
 	TextInput   input.Model
@@ -41,27 +49,31 @@ func initTextInput() input.Model {
 	return inputModel
 }
 
-func initialModel() *model {
-	return &model{
-		Todos:    []string{"Buy carrots", "Buy celery", "Buy kohlrabi"},
-		Selected: make(map[int]struct{}),
-		Cursor:   0,
-		Action:   None,
+func initialModel() *Model {
+	return &Model{
+		Data: Data{
+			Todos: []Todo{
+				{Text: "Buy carrots", Checked: false},
+				{Text: "Buy celery", Checked: false},
+				{Text: "Buy kohlrabi", Checked: false},
+			}, Cursor: 0,
+		},
+		Action: None,
 	}
 }
 
-func (m model) Init() tea.Cmd {
+func (m Model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func clearAndHideInput(m model) model {
+func clearAndHideInput(m Model) Model {
 	m.TextInput.SetValue("")
 	m.Action = None
 
 	return m
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -69,10 +81,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Action == Delete {
 			switch msg.String() {
 			case "y", "Y":
-				if len(m.Todos) > 1 {
-					m.Todos = append(m.Todos[:m.Cursor], m.Todos[m.Cursor+1:]...)
+				if len(m.Data.Todos) > 1 {
+					m.Data.Todos = append(m.Data.Todos[:m.Data.Cursor], m.Data.Todos[m.Data.Cursor+1:]...)
 				} else {
-					m.Todos = nil
+					m.Data.Todos = nil
 				}
 			}
 
@@ -86,9 +98,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if len(value) > 0 {
 					if m.Action == Add {
-						m.Todos = append(m.Todos, value)
+						m.Data.Todos = append(m.Data.Todos, Todo{Text: value, Checked: false})
 					} else if m.Action == Edit {
-						m.Todos[m.Cursor] = value
+						m.Data.Todos[m.Data.Cursor].Text = value
 					}
 				}
 
@@ -103,13 +115,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 
 			case "up", "k":
-				if m.Cursor > 0 {
-					m.Cursor--
+				if m.Data.Cursor > 0 {
+					m.Data.Cursor--
 				}
 
 			case "down", "j":
-				if m.Cursor < len(m.Todos)-1 {
-					m.Cursor++
+				if m.Data.Cursor < len(m.Data.Todos)-1 {
+					m.Data.Cursor++
 				}
 
 			case "o", "a":
@@ -117,22 +129,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "i", "e":
 				m.Action = Edit
-				m.TextInput.SetValue(m.Todos[m.Cursor])
+				m.TextInput.SetValue(m.Data.Todos[m.Data.Cursor].Text)
 				m.TextInput.CursorEnd()
 
 			case "d":
 				m.Action = Delete
-				if len(m.Todos) > 1 {
+				if len(m.Data.Todos) > 1 {
 					m.Action = Delete
 				}
 
 			case "enter", " ":
-				_, ok := m.Selected[m.Cursor]
-				if ok {
-					delete(m.Selected, m.Cursor)
-				} else {
-					m.Selected[m.Cursor] = struct{}{}
-				}
+				m.Data.Todos[m.Data.Cursor].Checked = !m.Data.Todos[m.Data.Cursor].Checked
 			}
 		}
 
@@ -149,32 +156,33 @@ func colorBg(val te.Style, color string) te.Style {
 	return val.Background(te.ColorProfile().Color(color))
 }
 
-func (m model) View() string {
+func (m Model) View() string {
 	title := te.String(" Todo List: \n")
 	title = colorFg(title, "15")
 	title = colorBg(title, "8")
 	title = title.Bold()
 	s := title.String()
 
-	if len(m.Todos) <= 0 {
+	if len(m.Data.Todos) <= 0 {
 		s += "The list is empty! press 'a' or 'o' to add a todo"
 	} else {
-		for i, todo := range m.Todos {
-			if m.Action == Edit && m.Cursor == i {
+		for i, todo := range m.Data.Todos {
+			if m.Action == Edit && m.Data.Cursor == i {
 				s += m.TextInput.View() + "\n"
 			} else {
+				text := todo.Text
 				cursor := " "
-				if m.Cursor == i {
+				if m.Data.Cursor == i {
 					cursor = ">"
 				}
 
 				checked := " "
-				if _, ok := m.Selected[i]; ok {
+				if m.Data.Todos[i].Checked {
 					checked = "x"
-					todo = te.String(todo).Faint().String()
+					text = te.String(text).Faint().String()
 				}
 
-				s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, todo)
+				s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, text)
 			}
 		}
 	}
@@ -189,14 +197,14 @@ func (m model) View() string {
 	return s
 }
 
-func load(path string) *model {
+func load(path string) *Model {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 
-	model := model{}
-	err = json.Unmarshal(data, &model)
+	model := Model{}
+	err = json.Unmarshal(data, &model.Data)
 	if err != nil {
 		fmt.Print(err)
 		return nil
@@ -205,8 +213,8 @@ func load(path string) *model {
 	return &model
 }
 
-func save(m model) {
-	mJson, _ := json.Marshal(m)
+func save(m Model) {
+	mJson, _ := json.Marshal(m.Data)
 	err := ioutil.WriteFile(m.FilePath, mJson, 0644)
 
 	if err != nil {
@@ -222,7 +230,7 @@ func get_path() string {
 	home, _ := os.UserHomeDir()
 	os.Mkdir(home+"/.tuido", os.ModePerm)
 
-	return home + "/.tuido/todos"
+	return home + "/.tuido/todos.json"
 }
 
 func main() {
